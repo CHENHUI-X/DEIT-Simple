@@ -5,7 +5,7 @@
 - [arxiv](https://arxiv.org/abs/2012.12877)
 ---
 ## Notice
-Because of the `requirements.txt` , it needs `timm==0.3.2` and `1.7.0` , but in this version , the  `timm.models.layers.helper.py` has a error :
+Because of the `requirements.txt` , it needs `timm==0.3.2` and `torch==1.7.0` , but in this version , the  `timm.models.layers.helper.py` has a error :
 ```python
   from torch._six import container_abcs
   # From PyTorch internals
