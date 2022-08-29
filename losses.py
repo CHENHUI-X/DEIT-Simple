@@ -15,12 +15,12 @@ class DistillationLoss(torch.nn.Module):
     def __init__(self, base_criterion: torch.nn.Module, teacher_model: torch.nn.Module,
                  distillation_type: str, alpha: float, tau: float):
         super().__init__()
-        self.base_criterion = base_criterion
+        self.base_criterion = base_criterion # like Cross Entropy
         self.teacher_model = teacher_model
         assert distillation_type in ['none', 'soft', 'hard']
         self.distillation_type = distillation_type
-        self.alpha = alpha
-        self.tau = tau
+        self.alpha = alpha # alpha
+        self.tau = tau # Tao
 
     def forward(self, inputs, outputs, labels):
         """
@@ -35,8 +35,11 @@ class DistillationLoss(torch.nn.Module):
         if not isinstance(outputs, torch.Tensor):
             # assume that the model outputs a tuple of [outputs, outputs_kd]
             outputs, outputs_kd = outputs
+            # outputs is out of class token , kd is the out of distillation token
+
         base_loss = self.base_criterion(outputs, labels)
         if self.distillation_type == 'none':
+            # just original loss
             return base_loss
 
         if outputs_kd is None:

@@ -17,8 +17,10 @@ import time
 import torch
 import torch.backends.cudnn as cudnn
 import json
-
+import torch.utils.data #如果不用这个就会出现pycharm不识别data的问题
+import  torch.nn as nn
 from pathlib import Path
+
 
 from timm.data import Mixup
 from timm.models import create_model
@@ -42,13 +44,13 @@ import utils
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
-    parser.add_argument('--batch-size', default=64, type=int)
-    parser.add_argument('--epochs', default=300, type=int)
+    parser.add_argument('--batch-size', default=8, type=int)
+    parser.add_argument('--epochs', default=1, type=int)
     parser.add_argument('--bce-loss', action='store_true')
     parser.add_argument('--unscale-lr', action='store_true')
 
     # Model parameters
-    parser.add_argument('--model', default='deit_base_patch16_224', type=str, metavar='MODEL',
+    parser.add_argument('--model', default='deit_base_distilled_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
     parser.add_argument('--input-size', default=224, type=int, help='images input size')
 
@@ -70,8 +72,11 @@ def get_args_parser():
                         help='Optimizer Epsilon (default: 1e-8)')
     parser.add_argument('--opt-betas', default=None, type=float, nargs='+', metavar='BETA',
                         help='Optimizer Betas (default: None, use opt default)')
+
     parser.add_argument('--clip-grad', type=float, default=None, metavar='NORM',
                         help='Clip gradient norm (default: None, no clipping)')
+    # NORM : 范数 , type : float, default = 2.0 , 表示2范数,即 梯度的平方 不超过某个数值
+
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='SGD momentum (default: 0.9)')
     parser.add_argument('--weight-decay', type=float, default=0.05,
@@ -79,6 +84,8 @@ def get_args_parser():
     # Learning rate schedule parameters
     parser.add_argument('--sched', default='cosine', type=str, metavar='SCHEDULER',
                         help='LR scheduler (default: "cosine"')
+    # cosine scheduler see https://blog.csdn.net/Roaddd/article/details/113260677
+
     parser.add_argument('--lr', type=float, default=5e-4, metavar='LR',
                         help='learning rate (default: 5e-4)')
     parser.add_argument('--lr-noise', type=float, nargs='+', default=None, metavar='pct, pct',
@@ -136,10 +143,12 @@ def get_args_parser():
                         help='Do not random erase first (clean) augmentation split')
 
     # * Mixup params
-    parser.add_argument('--mixup', type=float, default=0.8,
+    parser.add_argument('--mixup', type=float, default=0.0,
                         help='mixup alpha, mixup enabled if > 0. (default: 0.8)')
-    parser.add_argument('--cutmix', type=float, default=1.0,
+    parser.add_argument('--cutmix', type=float, default=0.0,
                         help='cutmix alpha, cutmix enabled if > 0. (default: 1.0)')
+
+    # nargs = + , 通配符 , + : 1 or more, * : 0 or more  ? : 1
     parser.add_argument('--cutmix-minmax', type=float, nargs='+', default=None,
                         help='cutmix min/max ratio, overrides alpha and enables cutmix if set (default: None)')
     parser.add_argument('--mixup-prob', type=float, default=1.0,
@@ -162,25 +171,27 @@ def get_args_parser():
     parser.add_argument('--attn-only', action='store_true')
 
     # Dataset parameters
-    parser.add_argument('--data-path', default='/datasets01/imagenet_full_size/061417/', type=str,
+    parser.add_argument('--data-path', default='./datasets/CIFAR/', type=str,
                         help='dataset path')
-    parser.add_argument('--data-set', default='IMNET', choices=['CIFAR', 'IMNET', 'INAT', 'INAT19'],
+    parser.add_argument('--data-set', default='CIFAR', choices=['CIFAR', 'IMNET', 'INAT', 'INAT19'],
                         type=str, help='Image Net dataset path')
-    parser.add_argument('--inat-category', default='name',
+    # ImageNet is too large for me
+
+    parser.add_argument('--int-category', default='name',
                         choices=['kingdom', 'phylum', 'class', 'order', 'supercategory', 'family', 'genus', 'name'],
                         type=str, help='semantic granularity')
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
-    parser.add_argument('--device', default='cuda',
-                        help='device to use for training / testing')
+    # parser.add_argument('--device', default='cuda',
+    #                     help='device to use for training / testing')
     parser.add_argument('--seed', default=0, type=int)
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
     parser.add_argument('--dist-eval', action='store_true', default=False, help='Enabling distributed evaluation')
-    parser.add_argument('--num_workers', default=10, type=int)
+    parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--pin-mem', action='store_true',
                         help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
     parser.add_argument('--no-pin-mem', action='store_false', dest='pin_mem',
@@ -195,27 +206,33 @@ def get_args_parser():
 
 
 def main(args):
-    utils.init_distributed_mode(args)
+    utils.init_distributed_mode(args) # In my pc , it's not work now.
 
     print(args)
 
     if args.distillation_type != 'none' and args.finetune and not args.eval:
+        # TODO : Understanding detail
         raise NotImplementedError("Finetuning with distillation not yet supported")
 
-    device = torch.device(args.device)
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu")
 
     # fix the seed for reproducibility
-    seed = args.seed + utils.get_rank()
+    if args.distributed:
+        seed = args.seed + utils.get_rank()
+    else:
+        seed = args.seed
     torch.manual_seed(seed)
     np.random.seed(seed)
-    # random.seed(seed)
 
+    # random.seed(seed)
     cudnn.benchmark = True
 
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
+
     dataset_val, _ = build_dataset(is_train=False, args=args)
 
-    if True:  # args.distributed:
+    if args.distributed : # TODO : Understanding detail , how implement distributed  ?
         num_tasks = utils.get_world_size()
         global_rank = utils.get_rank()
         if args.repeated_aug:
@@ -238,6 +255,8 @@ def main(args):
     else:
         sampler_train = torch.utils.data.RandomSampler(dataset_train)
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        # https://zhuanlan.zhihu.com/p/82985227
+        # validation do not need shuffle
 
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
@@ -246,9 +265,13 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=True,
     )
+
+    # data Augmentation
+    # TODO : Understanding detail , what's augmentation they are ?
     if args.ThreeAugment:
         data_loader_train.dataset.transform = new_data_aug_generator(args)
 
+    # The validation do not need data  Augmentations
     data_loader_val = torch.utils.data.DataLoader(
         dataset_val, sampler=sampler_val,
         batch_size=int(1.5 * args.batch_size),
@@ -257,8 +280,10 @@ def main(args):
         drop_last=False
     )
 
+    # TODO : Understanding detail
     mixup_fn = None
     mixup_active = args.mixup > 0 or args.cutmix > 0. or args.cutmix_minmax is not None
+    # See https://www.researchgate.net/figure/Illustration-of-five-augmentation-methods-A-Mixup-B-Cutout-C-CutMix-D_fig4_356680032
     if mixup_active:
         mixup_fn = Mixup(
             mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
@@ -268,37 +293,50 @@ def main(args):
     print(f"Creating model: {args.model}")
     model = create_model(
         args.model,
-        pretrained=False,
+        pretrained=False , # False
         num_classes=args.nb_classes,
         drop_rate=args.drop,
         drop_path_rate=args.drop_path,
         drop_block_rate=None,
         img_size=args.input_size
-    )
+    ) # A new model from scratch
 
     if args.finetune:
+        # TODO : Understanding how to finetune -- Answer  : Maybe I get it , See commence for detail , 2022-8-28
         if args.finetune.startswith('https'):
+            # download the used to finetune model from Internet
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.finetune, map_location='cpu', check_hash=True)
         else:
+            # load the used to finetune model  from checkpoint
             checkpoint = torch.load(args.finetune, map_location='cpu')
 
-        checkpoint_model = checkpoint['model']
-        state_dict = model.state_dict()
+        checkpoint_model = checkpoint['model'] # a pretrained model that can finetune it
+        state_dict = model.state_dict() # the new model from scratch that we creat
+
+        # See where the head and head_dist come from
+        # https://github.com/rwightman/pytorch-image-models/blob/f1d2160d857c1d98942e16ad3b59d7b74ecb2255/timm/models/deit.py#L150
+        # if output num not same as pretrained ,
+        # we just use new model head class num in place of pretrained
         for k in ['head.weight', 'head.bias', 'head_dist.weight', 'head_dist.bias']:
             if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
                 print(f"Removing key {k} from pretrained checkpoint")
                 del checkpoint_model[k]
 
+        # and we need consistent the input , so it need finetune the position embedding
+        #  ||||||||||||||||||||||||||||||||||||||||||||||
+        #  vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
         # interpolate position embedding
         pos_embed_checkpoint = checkpoint_model['pos_embed']
         embedding_size = pos_embed_checkpoint.shape[-1]
         num_patches = model.patch_embed.num_patches
         num_extra_tokens = model.pos_embed.shape[-2] - num_patches
+        # should be  1 for VIT , 2 for DeiT
+
         # height (== width) for the checkpoint position embedding
         orig_size = int((pos_embed_checkpoint.shape[-2] - num_extra_tokens) ** 0.5)
         # height (== width) for the new position embedding
-        new_size = int(num_patches ** 0.5)
+        new_size = int(num_patches ** 0.5) # Depend on the image size and patch size
         # class_token and dist_token are kept unchanged
         extra_tokens = pos_embed_checkpoint[:, :num_extra_tokens]
         # only the position tokens are interpolated
@@ -310,15 +348,20 @@ def main(args):
         new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
         checkpoint_model['pos_embed'] = new_pos_embed
 
+        # The finetuned model
         model.load_state_dict(checkpoint_model, strict=False)
 
+
+    # TODO : Understanding detail , what's this ?  -- Answer  : Maybe I get it , See commend for detail , 2022-8-28
     if args.attn_only:
+        # It just set position  embedding , attention block , last FC to train
         for name_p, p in model.named_parameters():
             if '.attn.' in name_p:
                 p.requires_grad = True
             else:
                 p.requires_grad = False
         try:
+            #  same operation ,maybe different name : head or fc
             model.head.weight.requires_grad = True
             model.head.bias.requires_grad = True
         except:
@@ -329,6 +372,14 @@ def main(args):
         except:
             print('no position encoding')
         try:
+            # See timm.models.layers.patch_embed.py
+            # It has a Convnet to transform channel ,default to C = 96
+            # You  can  also  see the DeiT original paper for detail .
+            # But , a Repositories of my fork  that a implementations of VIT ,
+            # just directly flatten & project to implement the patch embedding .
+            # See https://github.com/CHENHUI-X/VIT/tree/master/vit  for detail .
+
+            # Actually , I do not know that why didn't train the patch embedding ~~~
             for p in model.patch_embed.parameters():
                 p.requires_grad = False
         except:
@@ -339,22 +390,49 @@ def main(args):
     model_ema = None
     if args.model_ema:
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before SyncBN and DDP wrapper
+        # See https://www.cnblogs.com/sddai/p/14646581.html
+        # See https://zhuanlan.zhihu.com/p/51672655
+
         model_ema = ModelEma(
             model,
             decay=args.model_ema_decay,
             device='cpu' if args.model_ema_force_cpu else '',
             resume='')
+        '''
+        The ModelEma implement that "Exponential Moving Average" for  model (that we need training ) parameters
+            - First 
+            
+                - create a model that all parameter of the model is deep copy from initiative model
+                ( the initiative model is we need training model ) , then this model name as 'ema_model' .
+                It also know as 'Shadow model' .
+                
+            - Second
+            
+                - when we training our model , all of the model parameters is update by gradient descent .
+                  Now , it also need to do a additional operation , which is named 'EMA' .
+                  It's like following , the 'ema_v' is used to inplace of the model_v that the training parameters. 
+                  
+                    ema_v.copy_(ema_v * self.decay + (1. - self.decay) * model_v)
+
+        '''
 
     model_without_ddp = model
+    # Distributed Training
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
+
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
+
+    # TODO : Understanding detail for learning rate of distributed training , why do this ?
     if not args.unscale_lr:
         linear_scaled_lr = args.lr * args.batch_size * utils.get_world_size() / 512.0
         args.lr = linear_scaled_lr
+
     optimizer = create_optimizer(args, model_without_ddp)
+
+    # Actually it  like  loss_backward + clip_gradient + optimize.step
     loss_scaler = NativeScaler()
 
     lr_scheduler, _ = create_scheduler(args, optimizer)
@@ -372,6 +450,7 @@ def main(args):
     if args.bce_loss:
         criterion = torch.nn.BCEWithLogitsLoss()
 
+    # The distillation learning
     teacher_model = None
     if args.distillation_type != 'none':
         assert args.teacher_path, 'need to specify teacher-path when using distillation'
@@ -379,7 +458,7 @@ def main(args):
         teacher_model = create_model(
             args.teacher_model,
             pretrained=False,
-            num_classes=args.nb_classes,
+            num_classes= 1000,
             global_pool='avg',
         )
         if args.teacher_path.startswith('https'):
@@ -388,6 +467,14 @@ def main(args):
         else:
             checkpoint = torch.load(args.teacher_path, map_location='cpu')
         teacher_model.load_state_dict(checkpoint['model'])
+
+        if args.nb_classes != 1000 :
+            # Need finetune output of the teacher model
+            teacher_model = nn.Sequential(
+                teacher_model,
+                nn.Linear(1000,args.nb_classes)
+            )
+
         teacher_model.to(device)
         teacher_model.eval()
 
@@ -488,4 +575,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        '''
+        parents=True :
+            always automatically creates any intermediate parent directories that don't already exist, 
+        exist_ok=True :
+            argument tells makedirs not to raise an error if the  directory already exists.
+        '''
     main(args)

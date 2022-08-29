@@ -21,24 +21,48 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
                     set_training_mode=True, args=None):
+    '''
+
+    :param model:               The training model
+    :param criterion:           Loss function
+    :param data_loader:         Dataloader
+    :param optimizer:           Optimizer
+    :param device:              Device
+    :param epoch:               Current epoch for training
+    :param loss_scaler:         Aggregate loss_backward + clip_gradient + optimize.step
+    :param max_norm:            Clip gradient , ||g|| <= max_norm
+    :param model_ema:           EMA_Model
+    :param mixup_fn:            Data augmentation
+    :param set_training_mode:   Is train ?
+    :param args:                Parser
+    :return:
+    '''
     model.train(set_training_mode)
-    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger = utils.MetricLogger(delimiter="  ") # Logger
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
+        # See https://www.cnblogs.com/marsggbo/p/15983167.html
         samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
         if mixup_fn is not None:
+            # Mix up data
             samples, targets = mixup_fn(samples, targets)
 
         if args.bce_loss:
             targets = targets.gt(0.0).type(targets.dtype)
-
+            '''
+                比大小,eq,lt等. 以实现Binary Cross Entropy
+                >>> tensor([0., 0., 1., 1.])
+                >>> a.gt(0.0)
+                >>> Out[27]: tensor([False, False,  True,  True])
+            '''
         with torch.cuda.amp.autocast():
             outputs = model(samples)
+            # print(outputs.shape)
             loss = criterion(samples, outputs, targets)
 
         loss_value = loss.item()
@@ -51,10 +75,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
 
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
+
+        # loss backward + clip gradient  + optimize step
         loss_scaler(loss, optimizer, clip_grad=max_norm,
                     parameters=model.parameters(), create_graph=is_second_order)
 
-        torch.cuda.synchronize()
+        if args.distributed :
+            # which come from  utils.init_distributed_mode()
+            # It initialization in main()
+            torch.cuda.synchronize()
         if model_ema is not None:
             model_ema.update(model)
 
