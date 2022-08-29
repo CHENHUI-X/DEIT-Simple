@@ -5,7 +5,7 @@
 - [arxiv](https://arxiv.org/abs/2012.12877)
 ---
 ## Notice
-Because of the `requirements.txt`, it needs `timm==0.3.2` , but in the `timm.models.layers.helper.py` , there are a errors :
+Because of the `requirements.txt`, it needs `timm==0.3.2` , but in this version ,the  `timm.models.layers.helper.py` has a error :
 ```python
   from torch._six import container_abcs
   # From PyTorch internals
@@ -31,3 +31,4 @@ it should be :
         return parse
 
 ```
+Remember finetune it .
