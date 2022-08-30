@@ -1,8 +1,8 @@
 
 - Most of the code comes from the official library, my purpose is to learn it, and then I add the necessary comments.
-- [Reference repository 1 ](https://github.com/facebookresearch/deit)
-- [Reference repository 2 ](https://github.com/rwightman/pytorch-image-models/tree/master/timm/models)
-- [arxiv](https://arxiv.org/abs/2012.12877)
+- [Reference repository 1 : facebookresearch/deit](https://github.com/facebookresearch/deit)
+- [Reference repository 2 : timm/models](https://github.com/rwightman/pytorch-image-models/tree/master/timm/models)
+- [DEIT : Training data-efficient image transformers & distillation through attention](https://arxiv.org/abs/2012.12877)
 ---
 ## Notice
 Because of the `requirements.txt` , it needs `timm==0.3.2` and `torch==1.7.0` , but in this version , the  `timm.models.layers.helper.py` has a error :
