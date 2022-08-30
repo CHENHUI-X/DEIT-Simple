@@ -96,9 +96,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
 
 
 @torch.no_grad()
-def evaluate(data_loader, model, device):
+def evaluate(data_loader, model, device , args):
     criterion = torch.nn.CrossEntropyLoss()
-
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Test:'
 
@@ -111,7 +110,16 @@ def evaluate(data_loader, model, device):
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(images)
+            '''
+                if the model is DeiT , then it has tow output, one is output of clf token , 
+                another one is output of distillation token .
+            '''
+            if args.distillation_type != 'none':
+                # In this case , the pretrained model is distillation model
+                output , output_dist = model(images)
+            else:
+                output = model(images)
+
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))

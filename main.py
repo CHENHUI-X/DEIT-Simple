@@ -51,7 +51,9 @@ def get_args_parser():
 
     # Model parameters
     parser.add_argument('--model', default='deit_base_distilled_patch16_224', type=str, metavar='MODEL',
-                        help='Name of model to train')
+                        help='Name of model that pretrained')
+    # default model is deit
+
     parser.add_argument('--input-size', default=224, type=int, help='images input size')
 
     parser.add_argument('--drop', type=float, default=0.0, metavar='PCT',
@@ -130,7 +132,7 @@ def get_args_parser():
 
     parser.add_argument('--ThreeAugment', action='store_true')  # 3augment
 
-    parser.add_argument('--src', action='store_true')  # simple random crop
+    parser.add_argument('--src', action='store_true')  # whether simple random crop
 
     # * Random Erase params
     parser.add_argument('--reprob', type=float, default=0.25, metavar='PCT',
@@ -183,13 +185,18 @@ def get_args_parser():
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
-    # parser.add_argument('--device', default='cuda',
-    #                     help='device to use for training / testing')
+    parser.add_argument('--device', default='cuda',
+                        help='device to use for training / testing')
     parser.add_argument('--seed', default=0, type=int)
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
+
+
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
+    parser.add_argument('--eval-path',default =None ,type = str, help='The pretrained typically  model location .')
+    parser.add_argument('--eval-ema-path',default =None ,type = str,help='The pretrained EMA model location .')
+
     parser.add_argument('--dist-eval', action='store_true', default=False, help='Enabling distributed evaluation')
     parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--pin-mem', action='store_true',
@@ -214,8 +221,11 @@ def main(args):
         # TODO : Understanding detail
         raise NotImplementedError("Finetuning with distillation not yet supported")
 
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu")
+    if args.device == 'cuda' and torch.cuda.is_available():
+        device = 'cuda'
+    else:
+        print('GPU is not available ,it has set device to cpu')
+        device = 'cpu'
 
     # fix the seed for reproducibility
     if args.distributed:
@@ -232,7 +242,8 @@ def main(args):
 
     dataset_val, _ = build_dataset(is_train=False, args=args)
 
-    if args.distributed : # TODO : Understanding detail , how implement distributed  ?
+    if args.distributed :
+        # TODO : Understanding detail , how implement distributed  ?
         num_tasks = utils.get_world_size()
         global_rank = utils.get_rank()
         if args.repeated_aug:
@@ -273,7 +284,7 @@ def main(args):
 
     # The validation do not need data  Augmentations
     data_loader_val = torch.utils.data.DataLoader(
-        dataset_val, sampler=sampler_val,
+        dataset_val, sampler= sampler_val,
         batch_size=int(1.5 * args.batch_size),
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
@@ -292,7 +303,7 @@ def main(args):
 
     print(f"Creating model: {args.model}")
     model = create_model(
-        args.model,
+        args.model, # default model is DEIT
         pretrained=False , # False
         num_classes=args.nb_classes,
         drop_rate=args.drop,
@@ -312,6 +323,7 @@ def main(args):
             checkpoint = torch.load(args.finetune, map_location='cpu')
 
         checkpoint_model = checkpoint['model'] # a pretrained model that can finetune it
+
         state_dict = model.state_dict() # the new model from scratch that we creat
 
         # See where the head and head_dist come from
@@ -321,6 +333,7 @@ def main(args):
         for k in ['head.weight', 'head.bias', 'head_dist.weight', 'head_dist.bias']:
             if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
                 print(f"Removing key {k} from pretrained checkpoint")
+                # then just copy other layer expect for head layer
                 del checkpoint_model[k]
 
         # and we need consistent the input , so it need finetune the position embedding
@@ -348,11 +361,12 @@ def main(args):
         new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
         checkpoint_model['pos_embed'] = new_pos_embed
 
-        # The finetuned model
+        # The finetuned model ," strict = False " for that  shape of out maybe different .
+        # In this case , we just copy other layers .
         model.load_state_dict(checkpoint_model, strict=False)
 
 
-    # TODO : Understanding detail , what's this ?  -- Answer  : Maybe I get it , See commend for detail , 2022-8-28
+    # TODO : Understanding detail , what's this ?  -- Answer  : Maybe I get it , See comment for detail , 2022-8-28
     if args.attn_only:
         # It just set position  embedding , attention block , last FC to train
         for name_p, p in model.named_parameters():
@@ -374,7 +388,7 @@ def main(args):
         try:
             # See timm.models.layers.patch_embed.py
             # It has a Convnet to transform channel ,default to C = 96
-            # You  can  also  see the DeiT original paper for detail .
+            # You can also see the DeiT original paper for detail .
             # But , a Repositories of my fork  that a implementations of VIT ,
             # just directly flatten & project to implement the patch embedding .
             # See https://github.com/CHENHUI-X/VIT/tree/master/vit  for detail .
@@ -392,6 +406,7 @@ def main(args):
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before SyncBN and DDP wrapper
         # See https://www.cnblogs.com/sddai/p/14646581.html
         # See https://zhuanlan.zhihu.com/p/51672655
+
 
         model_ema = ModelEma(
             model,
@@ -419,6 +434,7 @@ def main(args):
     model_without_ddp = model
     # Distributed Training
     if args.distributed:
+        # args.gpu come from utils.init_distributed_mode()
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
 
@@ -458,9 +474,10 @@ def main(args):
         teacher_model = create_model(
             args.teacher_model,
             pretrained=False,
-            num_classes= 1000,
+            num_classes= 1000, # Every model in the timm is pretrained for ImageNet-1K
             global_pool='avg',
         )
+
         if args.teacher_path.startswith('https'):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.teacher_path, map_location='cpu', check_hash=True)
@@ -485,26 +502,70 @@ def main(args):
     )
 
     output_dir = Path(args.output_dir)
+
     if args.resume:
+        # Continue training the model from the breakpoint
         if args.resume.startswith('https'):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.resume, map_location='cpu', check_hash=True)
         else:
+            # load the model from disk
             checkpoint = torch.load(args.resume, map_location='cpu')
+
         model_without_ddp.load_state_dict(checkpoint['model'])
+
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
+            # Means that we are continue training .
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-            args.start_epoch = checkpoint['epoch'] + 1
+            args.start_epoch = checkpoint['epoch'] + 1 # epoch + 1
+
             if args.model_ema:
+                # load the  pretrained MEA model
                 utils._load_checkpoint_for_ema(model_ema, checkpoint['model_ema'])
             if 'scaler' in checkpoint:
                 loss_scaler.load_state_dict(checkpoint['scaler'])
         lr_scheduler.step(args.start_epoch)
-    if args.eval:
-        test_stats = evaluate(data_loader_val, model, device)
-        print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
-        return
+
+    if args.eval : # Inference
+        '''
+            if saved model is DeiT , then it has tow output, one is output of clf token , 
+            another one is output of distillation token .
+        '''
+        if args.eval_ema_path :
+            # Use the ema model to inference
+            try:
+                print(f"Loading EMA model ....")
+                checkpoint = torch.load(args.eval_ema_path, map_location='cpu')
+                model.load_state_dict(checkpoint['model_ema'])
+                # load the EMA model from disk
+            except:
+                print(f'Do not have found a pretrained EMA model in {args.ema_path} '
+                      f'or the EMA model do not map the created model ,'
+                      f'maybe you can try set args.distillation_type is not None!')
+                return
+            test_stats = evaluate(data_loader_val, model, device, args)
+            print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
+            return
+
+        elif args.eval_path:
+            try:
+                # Just inference topically
+                print(f"Loading pretrained model typically ....")
+                checkpoint = torch.load(args.eval_path, map_location='cpu')
+                model.load_state_dict(checkpoint['model'])
+                # load the EMA model from disk
+            except:
+                print(f'Do not have found a pretrained  model in {args.eval_path} '
+                      f'or the  model do not map the created model ,'
+                      f'maybe you can try set args.distillation_type is not None!')
+                return
+            test_stats = evaluate(data_loader_val, model, device ,args)
+            print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
+            return
+        else:
+            print('Need pretrained model !')
+            return
 
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
@@ -524,6 +585,7 @@ def main(args):
 
         lr_scheduler.step(epoch)
         if args.output_dir:
+            # save the model
             checkpoint_paths = [output_dir / 'checkpoint.pth']
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
