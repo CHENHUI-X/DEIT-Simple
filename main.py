@@ -218,7 +218,7 @@ def main(args):
     print(args)
 
     if args.distillation_type != 'none' and args.finetune and not args.eval:
-        # TODO : Understanding detail
+        # TODO : Understanding detail  - Answer : got it , 2022年8月31日
         raise NotImplementedError("Finetuning with distillation not yet supported")
 
     if args.device == 'cuda' and torch.cuda.is_available():
@@ -254,6 +254,7 @@ def main(args):
             sampler_train = torch.utils.data.DistributedSampler(
                 dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
             )
+
         if args.dist_eval:
             if len(dataset_val) % num_tasks != 0:
                 print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
