@@ -125,7 +125,7 @@ class MetricLogger(object):
             header,
             '[{0' + space_fmt + '}/{1}]',
             'eta: {eta}',
-            '{meters}',
+            '{meters}', # conclude lr and loss
             'time: {time}',
             'data: {data}'
         ]
