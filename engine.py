@@ -78,7 +78,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
 
         # loss backward + clip gradient  + optimize step
         loss_scaler(loss, optimizer, clip_grad=max_norm,
-                    parameters=model.parameters(), create_graph=is_second_order)
+                    parameters=model.parameters(),
+                    create_graph=is_second_order)
 
         if args.distributed :
             # which come from  utils.init_distributed_mode()

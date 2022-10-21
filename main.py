@@ -367,7 +367,7 @@ def main(args):
         model.load_state_dict(checkpoint_model, strict=False)
 
 
-    # TODO : Understanding detail , what's this ?  -- Answer  : Maybe I get it , See comment for detail , 2022-8-28
+
     if args.attn_only:
         # It just set position  embedding , attention block , last FC to train
         for name_p, p in model.named_parameters():
